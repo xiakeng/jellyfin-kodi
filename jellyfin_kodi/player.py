@@ -6,6 +6,7 @@ from __future__ import division, absolute_import, print_function, unicode_litera
 import os
 
 from kodi_six import xbmc, xbmcvfs
+from contextlib import closing
 
 from .objects.obj import Objects
 from .helper import translate, api, window, settings, dialog, event, JSONRPC
@@ -147,17 +148,67 @@ class Player(xbmc.Player):
         volume = result.get('volume')
         muted = result.get('muted')
 
+        jelly_client = Jellyfin(item['ServerId']).get_client()
+        current_item = jelly_client.jellyfin.get_item(item['Id'])
+        edl = []
+        
+        try:
+            edl = self.get_edl_content(current_item['Path'])
+        except :
+            edl = []
+
         item.update({
             'File': file,
             'CurrentPosition': item.get('CurrentPosition') or int(seektime),
             'Muted': muted,
             'Volume': volume,
-            'Server': Jellyfin(item['ServerId']).get_client(),
-            'Paused': False
+            'Server': jelly_client,
+            'Paused': False,
+            'EdlContent': edl
         })
 
         self.played[file] = item
         LOG.info("-->[ play/%s ] %s", item['Id'], item)
+
+        event("ItemEDLLoaded", edl, hexlify=False)
+
+    def get_edl_content(self, filePath):
+        edl_content = []
+        file_name, file_extension = os.path.splitext(filePath)
+
+        edl_file = file_name + '.edl'
+        if not xbmcvfs.exists(edl_file):
+            return edl_content
+        
+        edl_text = ''
+        with closing(xbmcvfs.File(edl_file)) as fo:
+            edl_text = fo.read()
+        edl_lines = edl_text.splitlines()
+ 
+        for line in edl_lines:
+            contents = line.split()
+            content_len = len(contents)
+            if content_len == 2:
+                start = float(contents[0])
+                action = int(contents[1])
+                edl_content.append({
+                    'start': start,
+                    'end': None,
+                    'action': action
+                })
+            elif content_len == 3:
+                start = float(contents[0])
+                end = float(contents[1])
+                action = int(contents[2])
+                edl_content.append({
+                    'start': start,
+                    'end': end,
+                    'action': action
+                })
+            elif content_len > 0:
+                LOG.warning("Invalid edl line")
+        
+        return edl_content
 
     def set_audio_subs(self, audio=None, subtitle=None):
         if audio:
@@ -278,8 +329,27 @@ class Player(xbmc.Player):
             'next_episode': data
         }
 
+        outro = 0
+        try:
+            outro = self.get_outro(item['EdlContent'], int(self.getTotalTime()))
+        except :
+            outro = 0
+            
+        if outro > 0:
+            next_info['notification_time'] = outro
+
         LOG.info("--[ next up ] %s", next_info)
         event("upnext_data", next_info, hexlify=True)
+
+    def get_outro(self, edl_content, total_time):
+        if len(edl_content) == 0:
+            return 0
+        
+        for edl in edl_content:
+            if edl['end'] is not None and abs(total_time - int(edl['end'])) < 2 and (int(edl['action']) == 0 or int(edl['action']) == 3):
+                return total_time - int(edl['start'])
+
+        return 0
 
     def onPlayBackPaused(self):
         current_file = self.get_playing_file()
