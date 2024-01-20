@@ -10,7 +10,7 @@ Changes:
 ### Jellyfin settings
 Jellyfin library must config correct Shared network folder, which both Jellyfin and Kodi have access to.
 ### Kodi settings
-in FileManager, add the SHared network folder configured in Jellyfin as source
+In FileManager, add the Shared network folder configured in Jellyfin as source
 ## Jellyfin and Kodi on same device
 Add Jellyfin library folder as source in Kodi FileManager
 
