@@ -313,7 +313,7 @@ class Player(xbmc.Player):
             },
             "current_episode": item["CurrentEpisode"],
             "next_episode": data,
-            "notification_offset": start
+            "notification_offset": start,
         }
 
         LOG.info("--[ next up ] %s", next_info)
@@ -404,7 +404,9 @@ class Player(xbmc.Player):
 
         if finish == True:
             self.up_next = True
-            item["CurrentPosition"] = int(self._get_safe_seek_time(int(item["Runtime"]), 5))
+            item["CurrentPosition"] = int(
+                self._get_safe_seek_time(int(item["Runtime"]), 5)
+            )
 
         data = {
             "QueueableMediaTypes": "Video,Audio",
