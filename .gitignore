@@ -73,3 +73,6 @@ pyinstrument/
 .venv/
 
 *.log
+
+# Addon build files
+*.zip
