@@ -155,6 +155,12 @@ class Monitor(xbmc.Monitor):
 
         if method == "Play":
 
+            if sender.startswith("upnextprovider"):
+                try:
+                    self.player.report_playback(True, True)
+                except Exception as error:
+                    LOG.warning("Failed to report playback before Up Next: %s", error)
+
             items = server.jellyfin.get_items(data["ItemIds"])
             # StartIndex is optional: music queues send it, but video casts omit
             # it (they send StartPositionTicks / stream indices instead). Absent

@@ -24,6 +24,7 @@ class Player(xbmc.Player):
 
     played = {}
     up_next = False
+    credits_reported = False
     skip_segments = {}
     skip_prompted = set()
     skip_dialog = None
@@ -127,10 +128,19 @@ class Player(xbmc.Player):
             LOG.warning("Failed to report session playing: %s", e)
         window("jellyfin.skip.%s.bool" % item["Id"], True)
 
+        try:
+            self._fetch_skip_segments(item)
+        except Exception as error:
+            LOG.warning("Failed to load media segments: %s", error)
+
+        try:
+            self.next_up()
+        except Exception as error:
+            LOG.warning("Failed to initialize Up Next: %s", error)
+
         # Immediate skip check for segments starting at 0:00
-        if settings("mediaSegmentsEnabled.bool"):
+        if settings("mediaSegmentsEnabled.bool") or self.up_next:
             try:
-                self._fetch_skip_segments(item)
                 current_pos = int(self.getTime())
                 self.check_skip_segments(item, current_pos)
             except Exception:
@@ -276,8 +286,8 @@ class Player(xbmc.Player):
         else:
             item["SubtitleStreamIndex"] = subs + tracks + 1
 
-    def next_up(self, start):
-        if not settings("enableUpNext.bool"):
+    def next_up(self):
+        if self.up_next or not settings("enableUpNext.bool"):
             return
 
         item = self.get_file_info(self.get_playing_file())
@@ -301,6 +311,9 @@ class Player(xbmc.Player):
                     return
 
                 break
+        else:
+            return
+
         server_address = item["Server"].auth.get_server_info(
             item["Server"].auth.server_id
         )["address"]
@@ -323,11 +336,32 @@ class Player(xbmc.Player):
             },
             "current_episode": item["CurrentEpisode"],
             "next_episode": data,
-            "notification_offset": start,
         }
+        next_info.update(self._get_up_next_segments(item["Id"]))
 
         LOG.info("--[ next up ] %s", next_info)
         event("upnext_data", next_info, hexlify=True)
+        self.up_next = True
+
+    def _get_up_next_segments(self, item_id):
+        info = {"skip_segments": []}
+        kinds = {"Introduction": "intro", "Recap": "recap"}
+        for segment in self.skip_segments.get(item_id, {}).values():
+            start = segment.get("Start")
+            end = segment.get("End")
+            if start is None or end is None or not 0 <= start < end:
+                continue
+
+            segment_type = segment.get("Type")
+            if segment_type == "Credits":
+                info["notification_offset"] = min(
+                    info.get("notification_offset", start), start
+                )
+            elif segment_type in kinds:
+                info["skip_segments"].append(
+                    {"kind": kinds[segment_type], "start": start, "end": end}
+                )
+        return info
 
     def onPlayBackPaused(self):
         current_file = self.get_playing_file()
@@ -375,7 +409,7 @@ class Player(xbmc.Player):
 
         item = self.get_file_info(current_file)
 
-        if window("jellyfin.external.bool") or self.up_next:
+        if window("jellyfin.external.bool") or self.credits_reported:
             return
 
         if not report:
@@ -391,15 +425,6 @@ class Player(xbmc.Player):
             if int(item["CurrentPosition"]) == 1:
                 return
 
-            try:
-                played = (
-                    float(item["CurrentPosition"] * 10000000)
-                    / int(item["Runtime"])
-                    * 100
-                )
-            except ZeroDivisionError:  # Runtime is 0.
-                played = 0
-
             if (item["CurrentPosition"] - previous) < 30:
                 return
 
@@ -413,10 +438,10 @@ class Player(xbmc.Player):
         self.detect_audio_subs(item)
 
         if finish:
-            self.up_next = True
-            finish_position = self._get_safe_seek_time(int(item["Runtime"]), 5)
-            if finish_position is not None:
-                item["CurrentPosition"] = int(finish_position)
+            # Jellyfin Runtime is in ticks; preserve completion across the next stop report.
+            item["CurrentPosition"] = max(
+                item["CurrentPosition"], int(item["Runtime"]) / 10000000.0
+            )
 
         data = {
             "QueueableMediaTypes": "Video,Audio",
@@ -435,9 +460,12 @@ class Player(xbmc.Player):
 
         try:
             item["Server"].jellyfin.session_progress(data)
-        except Exception:
-            LOG.info("--[ report playback ] %s", data)
-            pass
+        except Exception as error:
+            LOG.warning("Failed to report playback progress: %s", error)
+            return
+
+        if finish:
+            self.credits_reported = True
 
     def onPlayBackStopped(self):
         """Will be called when user stops playing a file."""
@@ -529,7 +557,7 @@ class Player(xbmc.Player):
         window("jellyfin_playing_id", clear=True)
 
     def _fetch_skip_segments(self, item):
-        if not settings("mediaSegmentsEnabled.bool"):
+        if not (settings("mediaSegmentsEnabled.bool") or settings("enableUpNext.bool")):
             return
 
         item_id = item["Id"]
@@ -595,8 +623,9 @@ class Player(xbmc.Player):
 
             segment_type = segment.get("Type")
 
+            up_next_credits = self.up_next and segment_type == "Credits"
             skip_mode = self._get_segment_skip_mode(segment_type)
-            if skip_mode == 0:  # Off
+            if skip_mode == 0 and not up_next_credits:
                 continue
 
             bounds = self._process_segment(
@@ -615,21 +644,27 @@ class Player(xbmc.Player):
             if segment_id in self.skip_prompted:
                 continue
 
+            if up_next_credits:
+                self.report_playback(True, True)
+                if self.credits_reported:
+                    self.skip_prompted.add(segment_id)
+                break
+
             self.skip_prompted.add(segment_id)
             LOG.debug(
                 "Skip check: Triggering _handle_skip_segment for %s", segment_type
             )
-
-            if segment_type == "Credits" and not self.up_next:
-                self.report_playback(True, True)
-                self.up_next = True
-                self.next_up(start)
 
             self._handle_skip_segment(segment_type, start, end, skip_mode)
             break
 
     def _get_segment_skip_mode(self, segment_type):
         """Get the skip mode for a segment type. Returns 0=Off, 1=Auto, 2=Button."""
+        if not settings("mediaSegmentsEnabled.bool") or (
+            self.up_next and segment_type in ("Introduction", "Recap", "Credits")
+        ):
+            return 0
+
         setting_map = {
             "Introduction": "skipIntroductionMode",
             "Credits": "skipCreditsMode",
@@ -712,8 +747,7 @@ class Player(xbmc.Player):
             )
 
         elif mode == 2:  # Show skip button
-            if segment_type != "Credits":
-                self._show_skip_button(segment_type, safe_end - start, safe_end)
+            self._show_skip_button(segment_type, safe_end - start, safe_end)
 
     def _show_skip_button(self, segment_type, duration, end_time):
         LOG.debug(
@@ -788,6 +822,7 @@ class Player(xbmc.Player):
         self._reset_skip_dialog()
 
         self.up_next = False
+        self.credits_reported = False
         self.skip_segments = {}
         self.skip_prompted = set()
 

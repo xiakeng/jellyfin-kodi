@@ -60,8 +60,11 @@ Detailed installation instructions can be found in the [Jellyfin Client Document
 
 ### Difference compared to origin repo
 
-- use upnext plugin to replace the credits skip button
-- change upnext initialization to where credits started
+- Initialize Up Next after playback is ready and send the Credits start plus every Intro and Recap range.
+- Let Up Next handle those segments when integration is active, while retaining native skipping as a fallback.
+- Report episode completion when Credits start and before Up Next advances, so long credits do not leave episodes unwatched.
+
+Intro and Recap skipping requires Up Next 1.3.0 or later.
 
 ### Contributing
 
