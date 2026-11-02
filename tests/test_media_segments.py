@@ -224,7 +224,13 @@ class TestSegmentDetection:
 
         player.skip_prompted = set()
 
-        monkeypatch.setattr(player, "report_playback", Mock())
+        player.up_next = segment_type == "Credits"
+        player.credits_reported = False
+        monkeypatch.setattr(
+            player,
+            "report_playback",
+            Mock(side_effect=lambda *_: setattr(player, "credits_reported", True)),
+        )
         monkeypatch.setattr(player, "next_up", Mock())
 
         skip_mode = 1
@@ -249,10 +255,9 @@ class TestSegmentDetection:
         if segment_type == "Credits":
             player.check_skip_segments(item, 12)
             player.report_playback.assert_called_once_with(True, True)
-            player.next_up.assert_called_once_with(10)
         else:
             player.report_playback.assert_not_called()
-            player.next_up.assert_not_called()
+        player.next_up.assert_not_called()
 
         if should_skip:
             assert "aa1" in player.skip_prompted
