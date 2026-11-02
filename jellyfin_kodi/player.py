@@ -412,11 +412,11 @@ class Player(xbmc.Player):
         item["CurrentPosition"] = int(self.getTime())
         self.detect_audio_subs(item)
 
-        if finish == True:
+        if finish:
             self.up_next = True
-            item["CurrentPosition"] = int(
-                self._get_safe_seek_time(int(item["Runtime"]), 5)
-            )
+            finish_position = self._get_safe_seek_time(int(item["Runtime"]), 5)
+            if finish_position is not None:
+                item["CurrentPosition"] = int(finish_position)
 
         data = {
             "QueueableMediaTypes": "Video,Audio",
