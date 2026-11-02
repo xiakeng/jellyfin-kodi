@@ -224,9 +224,8 @@ class TestSegmentDetection:
 
         player.skip_prompted = set()
 
-        player.played = {
-            "": {"Type": "Episode"}
-        }  # "Credits" type falls into next_up() which requires this value to be set (and an empty string is the default stub filename)
+        monkeypatch.setattr(player, "report_playback", Mock())
+        monkeypatch.setattr(player, "next_up", Mock())
 
         skip_mode = 1
         settings = Mock(return_value=skip_mode)
@@ -246,6 +245,14 @@ class TestSegmentDetection:
         player.skip_segments["test-item-id"] = segments
 
         player.check_skip_segments(item, 11)
+
+        if segment_type == "Credits":
+            player.check_skip_segments(item, 12)
+            player.report_playback.assert_called_once_with(True, True)
+            player.next_up.assert_called_once_with(10)
+        else:
+            player.report_playback.assert_not_called()
+            player.next_up.assert_not_called()
 
         if should_skip:
             assert "aa1" in player.skip_prompted
